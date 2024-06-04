@@ -1,0 +1,54 @@
+Attribute VB_Name = "TestProgram"
+
+' 定数の定義
+Const PI As Double = 3.14159
+Const GREETING As String = "Hello, World!"
+
+' メインエントリーポイント
+Sub Main()
+    Call Greet
+    Call CalculateArea(5)
+    Call ShowDate
+    Call PerformCalculation
+    Call UnusedProcedure
+End Sub
+
+' 挨拶を表示するプロシージャ
+Private Sub Greet()
+    Dim message As String
+    message = GREETING
+    MsgBox message
+End Sub
+
+' 円の面積を計算して表示するプロシージャ
+Private Sub CalculateArea(radius As Double)
+    On Error GoTo ErrorHandler
+    Dim area As Double
+    area = PI * radius * radius
+    MsgBox "Area: " & area
+    Exit Sub
+ErrorHandler:
+    MsgBox "An error occurred in CalculateArea."
+End Sub
+
+' 現在の日付を表示するプロシージャ
+Private Sub ShowDate()
+    MsgBox "Today's date: " & Date
+End Sub
+
+' 簡単な計算を行うプロシージャ
+Private Sub PerformCalculation()
+    Dim x As Integer
+    Dim y As Integer
+    Dim result As Integer
+    x = 10
+    y = 20
+    result = x + y
+    MsgBox "Result: " & result
+End Sub
+
+' 使用されないプロシージャ（未使用変数テスト用）
+Private Sub UnusedProcedure()
+    Dim unusedVar As String
+    unusedVar = "This is not used"
+End Sub
