@@ -1,0 +1,553 @@
+Option Explicit
+
+' INIファイルから指定されたキーの値を取得する関数
+' filePath: INIファイルのパス
+' section: 取得するセクション名
+' key: 取得するキー名
+Private Function GetINIValue(filePath As String, section As String, key As String) As String
+    Dim fso As Object
+    Dim ts As Object
+    Dim line As String
+    Dim currentSection As String
+    Dim keyValue() As String
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.OpenTextFile(filePath, 1) ' 1 = ForReading
+
+    currentSection = ""
+
+    Do While Not ts.AtEndOfStream
+        line = Trim(ts.ReadLine)
+        If Left(line, 1) = "[" And Right(line, 1) = "]" Then
+            currentSection = Mid(line, 2, Len(line) - 2)
+        ElseIf currentSection = section Then
+            keyValue = Split(line, "=")
+            If UBound(keyValue) = 1 Then
+                If Trim(keyValue(0)) = key Then
+                    GetINIValue = Trim(keyValue(1))
+                    Exit Do
+                End If
+            End If
+        End If
+    Loop
+
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+End Function
+
+' メインの解析処理を行うサブルーチン
+Sub AnalyzeSourceCode()
+    Dim iniFilePath As String
+    Dim sourceFolder As String
+    Dim outputFilePath As String
+    Dim files As Collection
+    Dim filePath As Variant
+    Dim sourceCode As String
+    Dim modules As New Dictionary
+    Dim moduleName As String
+    Dim routines As Dictionary
+    Dim callTree As Dictionary
+    Dim unusedVars As Dictionary
+    Dim showInheritance As Boolean
+    Dim showStartEndLines As Boolean
+    Dim showReturnType As Boolean
+    Dim showCommentAndCodeLines As Boolean
+    Dim showErrorHandling As Boolean
+
+    ' INIファイルのパスを指定
+    iniFilePath = "C:\path_to_ini\settings.ini"
+
+    ' INIファイルから設定を読み込む
+    sourceFolder = GetINIValue(iniFilePath, "Paths", "SourceFolder")
+    outputFilePath = GetINIValue(iniFilePath, "Paths", "OutputFile")
+    showInheritance = CBool(GetINIValue(iniFilePath, "Settings", "ShowInheritance"))
+    showStartEndLines = CBool(GetINIValue(iniFilePath, "Settings", "ShowStartEndLines"))
+    showReturnType = CBool(GetINIValue(iniFilePath, "Settings", "ShowReturnType"))
+    showCommentAndCodeLines = CBool(GetINIValue(iniFilePath, "Settings", "ShowCommentAndCodeLines"))
+    showErrorHandling = CBool(GetINIValue(iniFilePath, "Settings", "ShowErrorHandling"))
+
+    ' フォルダ内のファイルを取得
+    Set files = GetFiles(sourceFolder)
+
+    ' 各ファイルの解析
+    For Each filePath In files
+        sourceCode = ReadFileContent(filePath)
+        
+        ' モジュール名をファイル名から取得
+        moduleName = GetFileNameWithoutExtension(filePath)
+        
+        ' ルーチンの解析
+        Set routines = ParseRoutines(sourceCode)
+        routines.Add "SourceCode", sourceCode ' ソースコード全体を保存
+        modules.Add moduleName, routines
+    Next filePath
+
+    ' 呼び出し関係の解析
+    Set callTree = TraceCalls(modules)
+    
+    ' 未使用変数・定数の特定
+    Set unusedVars = New Dictionary
+    For Each moduleName In modules.Keys
+        Set routines = modules(moduleName)
+        unusedVars.Add moduleName, FindUnusedVariables(routines("SourceCode"), routines)
+    Next moduleName
+
+    ' 結果をテキストファイルに出力
+    OutputResultsToFile outputFilePath, modules, callTree, unusedVars
+
+    MsgBox "解析が完了しました。結果は" & outputFilePath & "に保存されています。"
+End Sub
+
+' 解析結果をテキストファイルに出力するサブルーチン
+' filePath: 出力ファイルのパス
+' modules: 解析されたモジュールの辞書
+' callTree: 呼び出し関係の辞書
+' unusedVars: 未使用変数の辞書
+Private Sub OutputResultsToFile(filePath As String, modules As Dictionary, callTree As Dictionary, unusedVars As Dictionary)
+    Dim fso As Object
+    Dim ts As Object
+    Dim moduleName As Variant
+    Dim routineName As Variant
+    Dim call As Variant
+    Dim calls As Collection
+    Dim routineLines As Dictionary
+    Dim commentAndCodeLines As Dictionary
+    Dim returnType As String
+    Dim hasErrorHandling As Boolean
+    Dim inheritanceInfo As String
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.CreateTextFile(filePath, True) ' True = Overwrite
+
+    For Each moduleName In modules.Keys
+        ts.WriteLine "Module: " & moduleName
+        
+        ' 継承関係を出力
+        If showInheritance Then
+            inheritanceInfo = GetInheritanceInfo(modules(moduleName)("SourceCode"))
+            If inheritanceInfo <> "" Then
+                ts.WriteLine "  Inherits: " & inheritanceInfo
+            End If
+        End If
+        
+        For Each routineName In modules(moduleName).Keys
+            If routineName <> "SourceCode" Then
+                ts.WriteLine "  Routine: " & routineName
+                
+                ' ルーチンの開始行と終了行を出力
+                If showStartEndLines Then
+                    Set routineLines = GetRoutineLines(modules(moduleName)("SourceCode"), routineName)
+                    ts.WriteLine "    Start Line: " & routineLines("Start")
+                    ts.WriteLine "    End Line: " & routineLines("End")
+                End If
+                
+                ' 関数の戻り値の型を出力
+                If showReturnType Then
+                    returnType = GetReturnType(modules(moduleName)("SourceCode"))
+                    If returnType <> "" Then
+                        ts.WriteLine "    Return Type: " & returnType
+                    End If
+                End If
+
+                ' コメント行数とコード行数を出力
+                If showCommentAndCodeLines Then
+                    Set commentAndCodeLines = GetCommentAndCodeLines(modules(moduleName)(routineName))
+                    ts.WriteLine "    Comment Lines: " & commentAndCodeLines("Comments")
+                    ts.WriteLine "    Code Lines: " & commentAndCodeLines("Code")
+                End If
+
+                ' 例外処理の有無を出力
+                If showErrorHandling Then
+                    hasErrorHandling = HasErrorHandling(modules(moduleName)(routineName))
+                    If hasErrorHandling Then
+                        ts.WriteLine "    Error Handling: Yes"
+                    Else
+                        ts.WriteLine "    Error Handling: No"
+                    End If
+                End If
+
+                ' 変数と定数を出力
+                ts.WriteLine "    Variables: " & Join(FindVariables(modules(moduleName)(routineName)), ", ")
+                ts.WriteLine "    Constants: " & Join(FindConstants(modules(moduleName)(routineName)), ", ")
+
+                ' 呼び出し関係を出力
+                Set calls = callTree(moduleName & "." & routineName)
+                If calls.Count > 0 Then
+                    ts.WriteLine "    Calls:"
+                    For Each call In calls
+                        ts.WriteLine "      " & call
+                    Next call
+                End If
+
+                ' 未使用変数を出力
+                Dim unusedVarNames As Collection
+                Set unusedVarNames = FindUnusedVariables(modules(moduleName)(routineName), modules(moduleName))
+
+                If unusedVarNames.Count > 0 Then
+                    ts.WriteLine "    Unused Variables: " & Join(unusedVarNames, ", ")
+                End If
+            End If
+        Next routineName
+        ts.WriteLine
+    Next moduleName
+
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+End Sub
+
+' 指定されたフォルダ内のすべてのファイルパスを取得する関数
+' folderPath: 取得するフォルダのパス
+Private Function GetFiles(folderPath As String) As Collection
+    Dim fso As Object
+    Dim folder As Object
+    Dim file As Object
+    Dim files As New Collection
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set folder = fso.GetFolder(folderPath)
+
+    For Each file In folder.Files
+        If LCase(Right(file.Name, 4)) = ".bas" Or LCase(Right(file.Name, 4)) = ".cls" Or LCase(Right(file.Name, 4)) = ".frm" Then
+            files.Add file.Path
+        End If
+    Next file
+
+    Set GetFiles = files
+    Set folder = Nothing
+    Set fso = Nothing
+End Function
+
+
+    Set GetFiles = files
+    Set folder = Nothing
+    Set fso = Nothing
+End Function
+
+' ファイルの内容を読み込む関数
+' filePath: 読み込むファイルのパス
+Private Function ReadFileContent(filePath As String) As String
+    Dim fso As Object
+    Dim ts As Object
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.OpenTextFile(filePath, 1) ' 1 = ForReading
+
+    ReadFileContent = ts.ReadAll
+
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+End Function
+
+' ファイルパスから拡張子を除いたファイル名を取得する関数
+' filePath: ファイルパス
+Private Function GetFileNameWithoutExtension(filePath As String) As String
+    Dim fso As Object
+    Dim fileName As String
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    fileName = fso.GetFileName(filePath)
+    GetFileNameWithoutExtension = Left(fileName, InStrRev(fileName, ".") - 1)
+    
+    Set fso = Nothing
+End Function
+
+' ソースコードからルーチン（サブルーチンや関数）を解析する関数
+' sourceCode: 解析対象のソースコード
+Private Function ParseRoutines(sourceCode As String) As Dictionary
+    Dim lines() As String
+    Dim i As Long
+    Dim routineName As String
+    Dim routines As New Dictionary
+
+    lines = Split(sourceCode, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        If InStr(lines(i), "Sub ") > 0 Or InStr(lines(i), "Function ") > 0 Then
+            routineName = ExtractRoutineName(lines(i))
+            routines.Add routineName, lines(i)
+        End If
+    Next i
+
+    Set ParseRoutines = routines
+End Function
+
+' ルーチンの宣言行からルーチン名を抽出する関数
+' line: ルーチンの宣言行
+Private Function ExtractRoutineName(line As String) As String
+    Dim tokens() As String
+    tokens = Split(line, " ")
+    If UBound(tokens) >= 1 Then
+        ExtractRoutineName = tokens(1)
+    Else
+        ExtractRoutineName = ""
+    End If
+End Function
+
+' 呼び出し関係を解析する関数
+' modules: 解析されたモジュールの辞書
+Private Function TraceCalls(modules As Dictionary) As Dictionary
+    Dim callTree As New Dictionary
+    Dim moduleName As Variant
+    Dim routineName As Variant
+    Dim sourceCode As String
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+    Dim callName As String
+    Dim callCollection As Collection
+
+    For Each moduleName In modules.Keys
+        sourceCode = modules(moduleName)("SourceCode")
+        lines = Split(sourceCode, vbCrLf)
+
+        For i = LBound(lines) To UBound(lines)
+            line = Trim(lines(i))
+            If line Like "*Call *" Then
+                callName = ExtractCallName(line)
+                If Not callTree.Exists(moduleName & "." & callName) Then
+                    Set callCollection = New Collection
+                    callTree.Add moduleName & "." & callName, callCollection
+                End If
+                callTree(moduleName & "." & callName).Add moduleName & "." & ExtractRoutineName(lines(i - 1))
+            End If
+        Next i
+    Next moduleName
+
+    Set TraceCalls = callTree
+End Function
+
+' 呼び出し行から呼び出し先のルーチン名を抽出する関数
+' line: 呼び出し行
+Private Function ExtractCallName(line As String) As String
+    Dim tokens() As String
+    tokens = Split(line, " ")
+    If UBound(tokens) >= 1 Then
+        ExtractCallName = tokens(1)
+    Else
+        ExtractCallName = ""
+    End If
+End Function
+
+' 未使用変数を特定する関数
+' sourceCode: 解析対象のソースコード
+' routines: 解析されたルーチンの辞書
+Private Function FindUnusedVariables(sourceCode As String, routines As Dictionary) As Collection
+    Dim unusedVars As New Collection
+    Dim variables As Collection
+    Dim routineName As Variant
+    Dim routineCode As String
+
+    ' すべての変数を取得
+    variables = FindVariables(sourceCode)
+
+    ' 各ルーチンで使用されている変数を特定
+    For Each routineName In routines.Keys
+        If routineName <> "SourceCode" Then
+            routineCode = routines(routineName)
+            variables = FindVariables(routineCode)
+            ' 使用されていない変数を未使用変数コレクションに追加
+            For Each variable In variables
+                If Not InStr(sourceCode, variable) > 0 Then
+                    unusedVars.Add variable
+                End If
+            Next variable
+        End If
+    Next routineName
+
+    Set FindUnusedVariables = unusedVars
+End Function
+
+' ルーチンやモジュールから変数を特定する関数
+' code: 解析対象のコード
+Private Function FindVariables(code As String) As Collection
+    Dim variables As New Collection
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+    Dim tokens() As String
+    Dim token As String
+
+    lines = Split(code, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If InStr(line, "Dim ") = 1 Then
+            tokens = Split(line, " ")
+            For Each token In tokens
+                If token <> "Dim" And token <> "As" Then
+                    variables.Add token
+                End If
+            Next token
+        End If
+    Next i
+
+    Set FindVariables = variables
+End Function
+
+' ルーチンやモジュールから定数を特定する関数
+' code: 解析対象のコード
+Private Function FindConstants(code As String) As Collection
+    Dim constants As New Collection
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+    Dim tokens() As String
+    Dim token As String
+
+    lines = Split(code, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If InStr(line, "Const ") = 1 Then
+            tokens = Split(line, " ")
+            For Each token In tokens
+                If token <> "Const" And token <> "As" Then
+                    constants.Add token
+                End If
+            Next token
+        End If
+    Next i
+
+    Set FindConstants = constants
+End Function
+
+' 継承関係を取得する関数
+' sourceCode: 解析対象のソースコード
+Private Function GetInheritanceInfo(sourceCode As String) As String
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+
+    lines = Split(sourceCode, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If InStr(line, "Implements ") > 0 Then
+            GetInheritanceInfo = Trim(Mid(line, InStr(line, "Implements ") + 11))
+            Exit Function
+        End If
+    Next i
+
+    GetInheritanceInfo = ""
+End Function
+
+' ルーチンの開始行と終了行を取得する関数
+' sourceCode: 解析対象のソースコード
+' routineName: 解析対象のルーチン名
+Private Function GetRoutineLines(sourceCode As String, routineName As String) As Dictionary
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+    Dim routineLines As New Dictionary
+    Dim startLine As Long
+    Dim endLine As Long
+
+    lines = Split(sourceCode, vbCrLf)
+    startLine = -1
+    endLine = -1
+
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If startLine = -1 And (InStr(line, "Sub " & routineName) > 0 Or InStr(line, "Function " & routineName) > 0) Then
+            startLine = i + 1
+        End If
+        If startLine <> -1 And (InStr(line, "End Sub") > 0 Or InStr(line, "End Function") > 0) Then
+            endLine = i + 1
+            Exit For
+        End If
+    Next i
+
+    If startLine <> -1 And endLine <> -1 Then
+        routineLines.Add "Start", startLine
+        routineLines.Add "End", endLine
+    End If
+
+    Set GetRoutineLines = routineLines
+End Function
+
+' ルーチンの戻り値の型を取得する関数
+' sourceCode: 解析対象のソースコード
+Private Function GetReturnType(sourceCode As String) As String
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+
+    lines = Split(sourceCode, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If InStr(line, "Function
+
+        If InStr(line, "Function ") = 1 Then
+            If InStr(line, " As ") > 0 Then
+                GetReturnType = Trim(Mid(line, InStr(line, " As ") + 4))
+                Exit Function
+            End If
+        End If
+    Next i
+
+    GetReturnType = ""
+End Function
+
+' コメント行数とコード行数を取得する関数
+' routineCode: 解析対象のルーチンコード
+Private Function GetCommentAndCodeLines(routineCode As String) As Dictionary
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+    Dim counts As New Dictionary
+    Dim commentCount As Long
+    Dim codeCount As Long
+
+    lines = Split(routineCode, vbCrLf)
+    commentCount = 0
+    codeCount = 0
+
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If Left(line, 1) = "'" Or Left(line, 1) = "Rem" Then
+            commentCount = commentCount + 1
+        ElseIf line <> "" Then
+            codeCount = codeCount + 1
+        End If
+    Next i
+
+    counts.Add "Comments", commentCount
+    counts.Add "Code", codeCount
+
+    Set GetCommentAndCodeLines = counts
+End Function
+
+' ルーチンがエラーハンドリングを持っているかを判断する関数
+' routineCode: 解析対象のルーチンコード
+Private Function HasErrorHandling(routineCode As String) As Boolean
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+
+    lines = Split(routineCode, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If InStr(line, "On Error") > 0 Then
+            HasErrorHandling = True
+            Exit Function
+        End If
+    Next i
+
+    HasErrorHandling = False
+End Function
+
+' メイン関数
+Sub Main()
+    ' 解析を実行する
+    AnalyzeSourceCode
+End Sub
+
+' プログラムのエントリーポイント
+Sub Main()
+    AnalyzeSourceCode
+End Sub
